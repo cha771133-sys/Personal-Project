@@ -1,0 +1,74 @@
+# 약 속 (Promise) — Cursor Rules
+
+## 프로젝트 개요
+시니어(60대 이상) 복약 관리 시스템.
+처방전 사진 한 장 → Claude Vision OCR → 복약 알림 자동 등록.
+
+## 기술 스택
+- Next.js 16, App Router, TypeScript
+- Tailwind CSS v4
+- Anthropic Claude API (Vision)
+- n8n 자동화, 텔레그램 봇 (MVP)
+- 식품의약품안전처 공공 API
+
+## 폴더 구조
+```
+promise/                     ← 프로젝트 루트
+├── .cursorrules
+├── .env.local               ← API 키 (git 제외)
+├── .env.example
+├── src/
+│   ├── app/
+│   │   ├── layout.tsx
+│   │   ├── page.tsx         ← 메인 업로드 화면
+│   │   ├── result/
+│   │   │   └── page.tsx     ← 분석 결과 화면
+│   │   └── api/
+│   │       ├── analyze/
+│   │       │   └── route.ts ← 처방전 OCR + LLM 처리
+│   │       └── medication/
+│   │           └── route.ts ← 식약처 API 검증
+│   ├── components/
+│   │   ├── UploadZone.tsx   ← 사진 업로드
+│   │   ├── MedicationCard.tsx ← 약품 결과 카드
+│   │   └── VoiceGuide.tsx   ← 음성 안내
+│   └── types/
+│       └── prescription.ts  ← 타입 정의
+```
+
+## 코딩 규칙
+
+### TypeScript
+- any 타입 사용 금지
+- 타입은 src/types/ 에 정의
+- props는 interface로 컴포넌트 상단에 정의
+
+### 컴포넌트
+- 'use client'는 꼭 필요한 곳에만 (서버 컴포넌트 우선)
+- 모든 비동기 데이터는 서버 컴포넌트 또는 API route에서 처리
+
+### 스타일 (Tailwind v4)
+- 인라인 style 속성 사용 금지
+- 시니어 UI: 텍스트 최소 text-lg, 버튼 최소 py-4 px-6
+- 메인 색상: blue-700, orange-500
+- 모바일 퍼스트 작성
+
+### API Routes (App Router)
+- 파일 위치: src/app/api/[기능]/route.ts
+- 응답 형태: { status: 'success'|'error', data: any, message: string }
+- 외부 API 호출: 반드시 try/catch + AbortSignal timeout
+- 환경변수: process.env.변수명 으로만 접근
+
+### 시니어 UX (절대 어기지 말 것)
+- 버튼 최소 높이 60px (py-4 이상)
+- 폰트 최소 text-lg (18px)
+- 에러 메시지는 쉬운 한국어 (예: "사진이 너무 어두워요. 밝은 곳에서 다시 찍어주세요.")
+- 모든 버튼에 aria-label 필수
+- 로딩 중에는 반드시 진행 상태 텍스트 표시
+
+## 절대 하지 말 것
+- pages/ 디렉토리 방식 혼용 (App Router만 사용)
+- CSS Modules, styled-components 도입
+- 불필요한 npm 패키지 추가
+- AI가 의학적 진단/처방을 직접 결정하는 로직
+- .env.local 을 git에 포함

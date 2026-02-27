@@ -1,65 +1,162 @@
-import Image from "next/image";
+'use client';
+
+import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import UploadZone from '@/components/UploadZone';
+import BottomNav from '@/components/BottomNav';
+import GuardianModeSwitch from '@/components/home/GuardianModeSwitch';
+import FontSizeControl from '@/components/home/FontSizeControl';
+import { useVoiceGuide } from '@/hooks/useVoiceGuide';
+import type { AnalyzeResponse } from '@/types/prescription';
+
+// 16px 베이스 기준: small=16px, base=18px, large=21px
+const FONT_SCALE_MAP: Record<'small' | 'base' | 'large', string> = {
+  small: '1',
+  base:  '1.125',
+  large: '1.3125',
+};
 
 export default function Home() {
+  const router = useRouter();
+  const [isLoading, setIsLoading] = useState(false);
+  const [fontSize, setFontSize]   = useState<'small' | 'base' | 'large'>('base');
+  const { speak, stop, isSpeaking } = useVoiceGuide();
+
+  // 저장된 글자 크기 복원
+  useEffect(() => {
+    const saved = localStorage.getItem('yaksouk_font_size') as 'small' | 'base' | 'large' | null;
+    if (saved && saved in FONT_SCALE_MAP) {
+      setFontSize(saved);
+      document.documentElement.style.setProperty('--font-scale', FONT_SCALE_MAP[saved]);
+    }
+  }, []);
+
+  const handleAnalyze = async (file: File) => {
+    setIsLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append('image', file);
+
+      const response = await fetch('/api/analyze', {
+        method: 'POST',
+        body: formData,
+      });
+
+      const result: AnalyzeResponse = await response.json();
+
+      if (result.status === 'success' && result.data) {
+        sessionStorage.setItem('yaksouk_result', JSON.stringify(result));
+        router.push('/result');
+      } else {
+        alert(result.message);
+      }
+    } catch {
+      alert('처방전 분석 중 문제가 생겼어요. 다시 시도해주세요.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleFontSizeChange = (size: 'small' | 'base' | 'large') => {
+    setFontSize(size);
+    document.documentElement.style.setProperty('--font-scale', FONT_SCALE_MAP[size]);
+    localStorage.setItem('yaksouk_font_size', size);
+  };
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
+    <div className="min-h-screen pb-28" style={{ background: 'var(--bg)' }}>
+      <div className="max-w-2xl mx-auto px-4 space-y-5">
+
+        {/* ── 헤더 ── */}
+        <header className="flex items-center justify-between pt-10 pb-2">
+          {/* 로고 */}
+          <div className="flex items-center gap-3">
+            <div
+              className="w-11 h-11 rounded-2xl flex items-center justify-center text-xl shadow-md flex-shrink-0"
+              style={{ background: 'var(--primary)' }}
             >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
+              💊
+            </div>
+            <span
+              className="font-black tracking-tight"
+              style={{ fontSize: '1.6rem', color: 'var(--text-main)' }}
             >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+              약<span style={{ color: 'var(--primary)' }}>속</span>
+            </span>
+          </div>
+
+          {/* 우측 컨트롤 */}
+          <div className="flex items-center gap-2">
+            <FontSizeControl fontSize={fontSize} onChange={handleFontSizeChange} />
+
+            {/* 음성 토글 */}
+            <button
+              type="button"
+              onClick={() =>
+                isSpeaking
+                  ? stop()
+                  : speak('약속 앱에 오신 것을 환영합니다. 처방전 사진을 올려주세요.')
+              }
+              className="w-11 h-11 rounded-xl flex items-center justify-center text-lg transition-colors flex-shrink-0"
+              style={{
+                background:  isSpeaking ? 'var(--primary)' : 'var(--surface)',
+                color:       isSpeaking ? '#fff'           : 'var(--text-sub)',
+                border:      `1.5px solid ${isSpeaking ? 'var(--primary)' : 'var(--border)'}`,
+              }}
+              aria-label={isSpeaking ? '음성 끄기' : '음성 켜기'}
+            >
+              {isSpeaking ? '🔇' : '🔊'}
+            </button>
+          </div>
+        </header>
+
+        {/* ── 서브타이틀 ── */}
+        <p
+          className="text-center text-base"
+          style={{ color: 'var(--text-sub)' }}
+        >
+          처방전 사진 한 장으로 복약 안내를 받아보세요
+        </p>
+
+        {/* ── 보호자 모드 스위치 ── */}
+        <GuardianModeSwitch />
+
+        {/* ── 처방전 업로드 ── */}
+        <UploadZone onAnalyze={handleAnalyze} isLoading={isLoading} />
+
+      </div>
+
+      <BottomNav />
+
+      {/* ── 로딩 오버레이 ── */}
+      {isLoading && (
+        <div
+          className="fixed inset-0 flex items-center justify-center z-50"
+          style={{ background: 'rgba(79, 110, 247, 0.82)' }}
+        >
+          <div
+            className="rounded-2xl p-10 text-center space-y-4 shadow-2xl mx-4"
+            style={{ background: 'var(--surface)', maxWidth: '360px', width: '100%' }}
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
+            <div
+              className="animate-spin rounded-full h-16 w-16 mx-auto"
+              style={{
+                border: '4px solid var(--primary-soft)',
+                borderTopColor: 'var(--primary)',
+              }}
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+            <p
+              className="font-bold"
+              style={{ fontSize: '1.2rem', color: 'var(--text-main)' }}
+            >
+              처방전을 읽고 있어요 😊
+            </p>
+            <p className="text-base" style={{ color: 'var(--text-sub)' }}>
+              잠깐만 기다려주세요...
+            </p>
+          </div>
         </div>
-      </main>
+      )}
     </div>
   );
 }

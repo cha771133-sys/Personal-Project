@@ -1,26 +1,67 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* ── 디자인 토큰 ── */
+  --primary:      #4F6EF7;
+  --primary-soft: #EEF1FF;
+  --surface:      #FFFFFF;
+  --bg:           #F5F6FA;
+  --text-main:    #1A1D2E;
+  --text-sub:     #7B8099;
+  --success:      #34C77B;
+  --border:       #E4E7F0;
+
+  /* 폰트 스케일: 기본 18px (1.125 × 16px) */
+  --font-scale: 1.125;
+
+  /* 레거시 (Tailwind @theme 용) */
+  --background: var(--bg);
+  --foreground: var(--text-main);
+}
+
+html {
+  font-size: calc(16px * var(--font-scale, 1.125));
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --font-sans: var(--font-noto-sans-kr), var(--font-dm-sans), sans-serif;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--bg);
+  color: var(--text-main);
+  font-family: var(--font-noto-sans-kr), 'Noto Sans KR', 'DM Sans', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── 보호자 모드 슬라이드 애니메이션 ── */
+.guardian-expand {
+  overflow: hidden;
+  transition: max-height 0.35s ease, opacity 0.35s ease, margin-top 0.2s ease;
+}
+.guardian-expand-hidden {
+  max-height: 0;
+  opacity: 0;
+  margin-top: 0;
+}
+.guardian-expand-visible {
+  max-height: 600px;
+  opacity: 1;
+  margin-top: 1rem;
+}
+
+/* ── 토글 스위치 썸 스프링 ── */
+.toggle-thumb {
+  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* ── 기본 버튼 hover 효과 ── */
+.btn-primary:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(79, 110, 247, 0.35);
+}
+.btn-primary {
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
 }
