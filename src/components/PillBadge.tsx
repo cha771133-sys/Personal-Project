@@ -23,20 +23,22 @@ function getLightColor(hex: string): string {
 
 const SIZES: Record<'sm' | 'md', Record<PillShape, [number, number]>> = {
   sm: {
-    round:   [28, 28],
-    oval:    [38, 22],
-    capsule: [38, 16],
-    tablet:  [32, 20],
-    liquid:  [24, 28],
-    powder:  [28, 28],
+    round:    [28, 28],
+    oval:     [38, 22],
+    capsule:  [38, 16],
+    tablet:   [32, 20],
+    liquid:   [24, 28],
+    powder:   [28, 28],
+    ointment: [28, 28],
   },
   md: {
-    round:   [56, 56],
-    oval:    [64, 36],
-    capsule: [64, 28],
-    tablet:  [52, 32],
-    liquid:  [48, 56],
-    powder:  [56, 56],
+    round:    [56, 56],
+    oval:     [64, 36],
+    capsule:  [64, 28],
+    tablet:   [52, 32],
+    liquid:   [48, 56],
+    powder:   [56, 56],
+    ointment: [56, 56],
   },
 };
 
