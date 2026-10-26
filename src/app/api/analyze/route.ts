@@ -331,10 +331,10 @@ export async function POST(request: NextRequest) {
 
   // ── 5. Gemini API 호출 ───────────────────────────────────
   try {
-    console.log('🚀 Gemini 호출 시작 | 모델: gemini-2.5-flash | 이미지 크기:', `${(file.size / 1024).toFixed(1)}KB`);
+    console.log('🚀 Gemini 호출 시작 | 모델: gemini-3.8-flash | 이미지 크기:', `${(file.size / 1024).toFixed(1)}KB`);
 
     const model = genAI.getGenerativeModel(
-      { model: 'gemini-2.5-flash' },
+      { model: 'gemini-3.8-flash' },
       { apiVersion: 'v1beta' }
     );
 
