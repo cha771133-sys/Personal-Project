@@ -1,5 +1,5 @@
 import 'server-only';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenerativeAI, type Part } from '@google/generative-ai';
 import { NextRequest, NextResponse } from 'next/server';
 import type { AnalyzeResponse, PrescriptionResult } from '@/types/prescription';
 import { scheduleNotification, deleteSchedules } from '@/lib/qstash';
@@ -34,6 +34,46 @@ export async function GET() {
 
 // v1beta 명시적 설정
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY || '');
+
+// 503(과부하) 시 같은 모델 1회 재시도 → 다음 모델로 폴백
+const GEMINI_MODELS = ['gemini-3.8-flash', 'gemini-3.5-flash'];
+const GEMINI_RETRY_DELAY_MS = 1000;
+
+function isOverloadedError(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error);
+  return msg.includes('503') || msg.includes('overloaded') || msg.includes('UNAVAILABLE');
+}
+
+async function callGeminiWithFallback(imagePart: Part, prompt: string): Promise<string> {
+  let lastError: unknown;
+
+  for (const modelName of GEMINI_MODELS) {
+    const model = genAI.getGenerativeModel(
+      { model: modelName },
+      { apiVersion: 'v1beta' }
+    );
+
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const result = await model.generateContent([imagePart, prompt]);
+        const text = result.response.text();
+        console.log(`✅ Gemini 성공 | 모델: ${modelName} | 시도: ${attempt}회차`);
+        return text;
+      } catch (error) {
+        // 503 이외의 에러는 기존 catch 블록의 에러 분기로 즉시 전달
+        if (!isOverloadedError(error)) throw error;
+
+        lastError = error;
+        console.warn(`⚠️ Gemini 503 | 모델: ${modelName} | 시도: ${attempt}회차`);
+        if (attempt === 1) {
+          await new Promise((resolve) => setTimeout(resolve, GEMINI_RETRY_DELAY_MS));
+        }
+      }
+    }
+  }
+
+  throw lastError;
+}
 
 const GEMINI_PROMPT = `당신은 처방전과 약 봉투를 분석하는 전문가입니다.
 이미지를 보고 아래 정보를 추출해주세요:
@@ -331,24 +371,17 @@ export async function POST(request: NextRequest) {
 
   // ── 5. Gemini API 호출 ───────────────────────────────────
   try {
-    console.log('🚀 Gemini 호출 시작 | 모델: gemini-3.8-flash | 이미지 크기:', `${(file.size / 1024).toFixed(1)}KB`);
+    console.log('🚀 Gemini 호출 시작 | 모델:', GEMINI_MODELS.join(' → '), '| 이미지 크기:', `${(file.size / 1024).toFixed(1)}KB`);
 
-    const model = genAI.getGenerativeModel(
-      { model: 'gemini-3.8-flash' },
-      { apiVersion: 'v1beta' }
-    );
-
-    const result = await model.generateContent([
+    const responseText = await callGeminiWithFallback(
       {
         inlineData: {
           data: base64Data,      // base64 문자열
           mimeType: mimeType,    // 반드시 포함
         },
       },
-      GEMINI_PROMPT,
-    ]);
-
-    const responseText = result.response.text();
+      GEMINI_PROMPT
+    );
     console.log('✅ Gemini 응답 수신 | 길이:', responseText.length);
     console.log('📄 Gemini 응답 원문:', responseText);
 
