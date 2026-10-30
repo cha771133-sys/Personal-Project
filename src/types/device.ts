@@ -15,6 +15,7 @@ export interface DeviceMedication {
   pillShape?: PillShape;
 
   status: "pending" | "completed";
+  completedAt?: string;
 }
 
 // Redis에 저장할 데이터
