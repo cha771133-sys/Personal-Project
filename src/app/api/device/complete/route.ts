@@ -109,15 +109,34 @@ export async function POST(request: NextRequest) {
       [occurrenceId, completedAt],
     );
 
-    if (
-      !Array.isArray(result) ||
-      result.length !== 3 ||
-      result.some((v) => typeof v !== "string")
-    ) {
+    // Upstash SDK can deserialize numeric-looking Redis strings into numbers.
+    // Accept either representation rather than returning 500 after a successful write.
+    if (!Array.isArray(result) || result.length !== 3) {
+      console.error("[Device Complete] Unexpected EVAL result shape", {
+        isArray: Array.isArray(result),
+        valueType: typeof result,
+      });
       throw new Error("Unexpected Redis EVAL response");
     }
 
-    const [code, savedAt, versionText] = result as string[];
+    const [rawCode, rawSavedAt, rawVersion] = result as unknown[];
+    if (
+      typeof rawCode !== "string" ||
+      typeof rawSavedAt !== "string" ||
+      (typeof rawVersion !== "string" && typeof rawVersion !== "number")
+    ) {
+      console.error("[Device Complete] Unexpected EVAL value types", {
+        types: result.map((value: unknown) => typeof value),
+      });
+      throw new Error("Unexpected Redis EVAL value types");
+    }
+
+    const code = rawCode;
+    const savedAt = rawSavedAt;
+    const scheduleVersion = Number(rawVersion);
+    if (!Number.isSafeInteger(scheduleVersion) || scheduleVersion < 0) {
+      throw new Error("Invalid Redis scheduleVersion");
+    }
 
     if (code === "NO_SCHEDULE" || code === "NOT_FOUND") {
       return NextResponse.json(
@@ -142,7 +161,7 @@ export async function POST(request: NextRequest) {
         occurrenceId,
         status: "completed",
         completedAt: savedAt,
-        scheduleVersion: Number(versionText),
+        scheduleVersion,
         alreadyCompleted: code === "ALREADY_COMPLETED",
       },
       { status: 200, headers: responseHeaders },
