@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 
-type DeviceEntry = {
+export type DeviceCalendarEntry = {
   occurrenceId: string;
   name: string;
   dose: string;
@@ -16,11 +16,14 @@ type DeviceCalendarData = {
   timezone: string;
   scheduleVersion: number;
   generatedAt: string;
-  medications: DeviceEntry[];
+  medications: DeviceCalendarEntry[];
+};
+
+type Props = {
+  onRecordsLoaded?: (records: DeviceCalendarEntry[] | null) => void;
 };
 
 function readableTime(value: string): string {
-  // Device's scheduledAt uses ISO 8601 with +09:00; display calendar-local time.
   return value.slice(11, 16);
 }
 
@@ -29,12 +32,16 @@ function completedTime(value: string | null): string | null {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return null;
   return new Intl.DateTimeFormat("ko-KR", {
-    timeZone: "Asia/Seoul", month: "numeric", day: "numeric",
-    hour: "2-digit", minute: "2-digit", hour12: false,
+    timeZone: "Asia/Seoul",
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
   }).format(date);
 }
 
-export default function DeviceCalendarPanel() {
+export default function DeviceCalendarPanel({ onRecordsLoaded }: Props) {
   const [token, setToken] = useState("");
   const [data, setData] = useState<DeviceCalendarData | null>(null);
   const [busy, setBusy] = useState(false);
@@ -54,16 +61,18 @@ export default function DeviceCalendarPanel() {
       if (!response.ok) throw new Error(json.error || `HTTP ${response.status}`);
       if (!Array.isArray(json.medications)) throw new Error("INVALID_RESPONSE");
       setData(json);
+      onRecordsLoaded?.(json.medications);
     } catch (e) {
       setError(e instanceof Error ? e.message : "NETWORK_ERROR");
       setData(null);
+      onRecordsLoaded?.(null); // 조회 실패 시 기존 서버 상태를 남겨두지 않음
     } finally {
       setBusy(false);
     }
   }
 
   const grouped = useMemo(() => {
-    const map = new Map<string, DeviceEntry[]>();
+    const map = new Map<string, DeviceCalendarEntry[]>();
     for (const item of data?.medications ?? []) {
       const day = item.scheduledAt.slice(0, 10);
       const existing = map.get(day) ?? [];
@@ -81,8 +90,8 @@ export default function DeviceCalendarPanel() {
       <div className="space-y-1">
         <h2 className="text-xl font-bold text-gray-900">스마트 약통 복약 기록 (서버)</h2>
         <p className="text-sm text-gray-600">
-          ESP32가 Redis에 저장한 복용 완료 상태를 확인합니다. 아래 기록은
-          기존 수동 체크/이번 달 복약률과 별도로 표시됩니다.
+          서버 기록을 불러오면 달력의 날짜 표시와 오늘의 체크리스트에도
+          ESP32 완료 상태가 반영됩니다. 수동 체크는 브라우저에만 저장됩니다.
         </p>
       </div>
 
@@ -109,6 +118,7 @@ export default function DeviceCalendarPanel() {
           <div className="rounded-xl bg-blue-50 px-4 py-3 text-sm text-blue-900">
             <p className="font-bold">{data.deviceId} · 일정 버전 {data.scheduleVersion}</p>
             <p>총 {total}건 중 완료 {completed}건 / 미완료 {total - completed}건</p>
+            <p className="mt-1 text-xs">달력: ● 예정 / ◐ 일부 완료 / ✅ 완료 / ❌ 지난 미완료</p>
           </div>
 
           {total === 0 ? (
@@ -148,8 +158,8 @@ export default function DeviceCalendarPanel() {
             </div>
           ))}
           <p className="text-xs text-gray-500">
-            현재 기기에 저장된 일정만 표시합니다. 새 처방전을 등록해 기존 일정을
-            교체하면 이전 일정은 이 목록에 나타나지 않습니다.
+            현재 Redis에 남아 있는 일정만 표시합니다. 새 처방전을 등록하면
+            기존 일정 목록과 완료 기록은 교체될 수 있습니다.
           </p>
         </div>
       )}

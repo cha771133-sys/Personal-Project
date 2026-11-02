@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import BottomNav from '@/components/BottomNav';
-import DeviceCalendarPanel from '@/components/DeviceCalendarPanel';
+import DeviceCalendarPanel, { type DeviceCalendarEntry } from '@/components/DeviceCalendarPanel';
 import { useVoiceGuide } from '@/hooks/useVoiceGuide';
 import type { AnalyzeResponse, Medication, MedicationCheckState } from '@/types/prescription';
 import type { PillInfoResult } from '@/app/api/pill-info/route';
@@ -61,6 +61,8 @@ export default function CalendarPage() {
 
   const [medications, setMedications] = useState<Medication[]>([]);
   const [calendarData, setCalendarData] = useState<CalendarData>({});
+  // CALENDAR_SERVER_SYNC_V2: records are in memory only, not localStorage.
+  const [serverEntries, setServerEntries] = useState<DeviceCalendarEntry[] | null>(null);
   const [viewYear, setViewYear] = useState(today.getFullYear());
   const [viewMonth, setViewMonth] = useState(today.getMonth());
   // drug_name → 낱알식별 정보 (없으면 null)
@@ -142,8 +144,29 @@ export default function CalendarPage() {
     notifyPatientCheck(drugName, alertTime, checked);
   }, [checkStates, todayKey, medications, speak]);
 
+  // Match by Korean calendar date, simple medication name, and time.
+  // The server view has no prescription/account ID yet; single-device demo only.
+  const isDeviceCompleted = useCallback((simpleName: string, day: string, time: string): boolean => {
+    return serverEntries?.some(entry =>
+      entry.name === simpleName &&
+      entry.scheduledAt.slice(0, 10) === day &&
+      entry.scheduledAt.slice(11, 16) === time &&
+      entry.status === 'completed'
+    ) ?? false;
+  }, [serverEntries]);
+
   // 이번 달 복약률 계산
-  const calcAdherence = useCallback((): number => {
+  const calcAdherence = useCallback((): number | null => {
+    if (serverEntries !== null) {
+      // Only doses already due are in the denominator. No scheduled doses -> N/A.
+      const month = String(viewYear) + '-' + String(viewMonth + 1).padStart(2, '0');
+      const due = serverEntries.filter(entry =>
+        entry.scheduledAt.startsWith(month) && Date.parse(entry.scheduledAt) <= Date.now()
+      );
+      if (due.length === 0) return null;
+      const done = due.filter(entry => entry.status === 'completed').length;
+      return Math.round((done / due.length) * 100);
+    }
     if (medications.length === 0) return 0;
     const days = getDaysInMonth(viewYear, viewMonth);
     const pastDays = days.filter(d => toDateKey(d) <= todayKey && d.getMonth() === viewMonth);
@@ -160,16 +183,19 @@ export default function CalendarPage() {
       }
     }
     return total === 0 ? 0 : Math.round((checked / total) * 100);
-  }, [calendarData, medications, viewYear, viewMonth, todayKey]);
+  }, [calendarData, medications, viewYear, viewMonth, todayKey, serverEntries]);
 
   // 오늘 모든 약의 모든 시간대 완료 여부
   const todayDone = medications.length > 0 && medications.every(med => {
     const times = med.alert_times?.length ? med.alert_times : [''];
     const state = checkStates.find(s => s.drugName === med.drug_name);
-    return times.every(t => state?.checks[t] === true);
+    return times.every(t => state?.checks[t] === true ||
+      isDeviceCompleted(med.drug_name_simple, todayKey, t));
   });
 
   const adherence = calcAdherence();
+  const isServerMode = serverEntries !== null;
+  const highAdherence = adherence !== null && adherence >= 80;
   const days = getDaysInMonth(viewYear, viewMonth);
   const firstDow = getFirstDayOfWeek(viewYear, viewMonth);
   const WEEK_LABELS = ['일', '월', '화', '수', '목', '금', '토'];
@@ -184,8 +210,16 @@ export default function CalendarPage() {
   };
 
   // 달력 날짜별 복약 상태
-  const getDayStatus = (date: Date): 'done' | 'miss' | 'none' => {
+  const getDayStatus = (date: Date): 'done' | 'miss' | 'none' | 'scheduled' | 'partial' => {
     const key = toDateKey(date);
+    if (serverEntries !== null) {
+      const entries = serverEntries.filter(e => e.scheduledAt.slice(0, 10) === key);
+      if (entries.length === 0) return 'none';
+      if (key > todayKey) return 'scheduled';
+      if (entries.every(e => e.status === 'completed')) return 'done';
+      if (key < todayKey) return 'miss';
+      return entries.some(e => e.status === 'completed') ? 'partial' : 'scheduled';
+    }
     if (key > todayKey) return 'none'; // 미래
     if (medications.length === 0) return 'none';
     const rec = calendarData[key] || {};
@@ -215,19 +249,23 @@ export default function CalendarPage() {
 
         {/* 복약률 */}
         <div className={`rounded-2xl p-5 text-center shadow-sm ${
-          adherence >= 80 ? 'bg-green-50 border-2 border-green-400' : 'bg-orange-50 border-2 border-orange-400'
+          highAdherence ? 'bg-green-50 border-2 border-green-400' : 'bg-orange-50 border-2 border-orange-400'
         }`}>
-          <p className="text-lg font-semibold text-gray-600">이번 달 복약률</p>
-          <p className={`text-5xl font-black mt-1 ${adherence >= 80 ? 'text-green-700' : 'text-orange-600'}`}>
-            {adherence}%
+          <p className="text-lg font-semibold text-gray-600">{isServerMode ? '이번 달 스마트 약통 복약률' : '이번 달 복약률 (수동 기록)'}</p>
+          <p className={`text-5xl font-black mt-1 ${highAdherence ? 'text-green-700' : 'text-orange-600'}`}>
+            {adherence === null ? '—' : String(adherence) + '%'}
           </p>
           <p className="text-base text-gray-500 mt-1">
-            {adherence >= 80 ? '정말 잘 챙겨 드시고 있어요 👏' : '조금 더 꼼꼼하게 챙겨봐요 💪'}
+            {isServerMode
+              ? (adherence === null
+                  ? '이번 달에는 아직 복용 시간이 지난 서버 일정이 없습니다.'
+                  : '복용 시각이 지난 서버 일정 중 완료된 비율입니다. (수동 체크 미포함)')
+              : (highAdherence ? '정말 잘 챙겨 드시고 있어요 👏' : '조금 더 꼼꼼하게 챙겨봐요 💪')}
           </p>
         </div>
 
         {/* ESP32 / Redis: read-only server calendar */}
-        <DeviceCalendarPanel />
+        <DeviceCalendarPanel onRecordsLoaded={setServerEntries} />
 
         {/* 달력 */}
         <div className="bg-white rounded-2xl shadow-sm p-4 space-y-3">
@@ -277,6 +315,8 @@ export default function CalendarPage() {
                   <span>{date.getDate()}</span>
                   {status === 'done' && <span className="text-xs leading-none">✅</span>}
                   {status === 'miss' && <span className="text-xs leading-none">❌</span>}
+                  {status === 'scheduled' && <span className="text-xs leading-none text-blue-500" title="복약 일정 있음">●</span>}
+                  {status === 'partial' && <span className="text-xs leading-none text-amber-600" title="일부 복용 완료">◐</span>}
                 </div>
               );
             })}
@@ -307,7 +347,8 @@ export default function CalendarPage() {
                   ? [...med.alert_times].sort()
                   : [''];
                 const drugState = checkStates.find(s => s.drugName === med.drug_name);
-                const allChecked = times.every(t => drugState?.checks[t] === true);
+                const allChecked = times.every(t => drugState?.checks[t] === true ||
+                  isDeviceCompleted(med.drug_name_simple, todayKey, t));
 
                 return (
                   <div
@@ -333,7 +374,9 @@ export default function CalendarPage() {
                     {/* 시간대별 체크박스 행 */}
                     <div className="divide-y divide-gray-100">
                       {times.map((alertTime) => {
-                        const isChecked = drugState?.checks[alertTime] === true;
+                        const manualChecked = drugState?.checks[alertTime] === true;
+                        const deviceChecked = isDeviceCompleted(med.drug_name_simple, todayKey, alertTime);
+                        const isChecked = manualChecked || deviceChecked;
                         const label = alertTime
                           ? `${getTimeLabel(alertTime)}  ${alertTime}`
                           : '복용';
@@ -348,6 +391,7 @@ export default function CalendarPage() {
                             <input
                               type="checkbox"
                               checked={isChecked}
+                              disabled={deviceChecked}
                               onChange={(e) =>
                                 handleTimeCheck(med.drug_name, alertTime, e.target.checked)
                               }
@@ -360,7 +404,9 @@ export default function CalendarPage() {
                               {label}
                             </span>
                             {isChecked && (
-                              <span className="ml-auto text-sm font-semibold text-green-600">완료 ✓</span>
+                              <span className="ml-auto text-sm font-semibold text-green-600">
+                                {deviceChecked ? '기기 완료 ✓' : '수동 완료 ✓'}
+                              </span>
                             )}
                           </label>
                         );
