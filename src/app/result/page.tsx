@@ -8,6 +8,7 @@ import { useVoiceGuide } from '@/hooks/useVoiceGuide';
 import { useNotification } from '@/hooks/useNotification';
 import { saveHistory } from '@/lib/historyStorage';
 import type { AnalyzeResponse, Medication } from '@/types/prescription';
+import DevicePublishPanel from '@/components/DevicePublishPanel';
 
 type TelegramState = 'idle' | 'sending' | 'done' | 'error';
 type ResultViewMode = 'list' | 'card';
@@ -315,7 +316,11 @@ export default function ResultPage() {
             </ul>
           </div>
         )}
-
+<DevicePublishPanel
+  medications={data.medications.filter(
+    m => alarmEnabled[m.drug_name_simple] !== false
+  )}
+/>
         {/* ── 3. 하단 통합 알림 설정 ──────────────────────── */}
         <div className="bg-white border-2 border-gray-200 rounded-2xl p-5 space-y-3">
           <div className="flex items-center gap-2 mb-1">
