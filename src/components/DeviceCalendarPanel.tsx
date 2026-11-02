@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 export type DeviceCalendarEntry = {
   occurrenceId: string;
@@ -21,6 +21,10 @@ type DeviceCalendarData = {
 
 type Props = {
   onRecordsLoaded?: (records: DeviceCalendarEntry[] | null) => void;
+  onAuthorizedToken?: (token: string) => void;
+  onCompleteRequest?: (entry: DeviceCalendarEntry) => void;
+  savingOccurrenceId?: string | null;
+  refreshVersion?: number;
 };
 
 function readableTime(value: string): string {
@@ -41,7 +45,10 @@ function completedTime(value: string | null): string | null {
   }).format(date);
 }
 
-export default function DeviceCalendarPanel({ onRecordsLoaded }: Props) {
+export default function DeviceCalendarPanel({
+  onRecordsLoaded, onAuthorizedToken, onCompleteRequest,
+  savingOccurrenceId = null, refreshVersion = 0,
+}: Props) {
   const [token, setToken] = useState("");
   const [data, setData] = useState<DeviceCalendarData | null>(null);
   const [busy, setBusy] = useState(false);
@@ -62,14 +69,23 @@ export default function DeviceCalendarPanel({ onRecordsLoaded }: Props) {
       if (!Array.isArray(json.medications)) throw new Error("INVALID_RESPONSE");
       setData(json);
       onRecordsLoaded?.(json.medications);
+      onAuthorizedToken?.(token);
     } catch (e) {
       setError(e instanceof Error ? e.message : "NETWORK_ERROR");
       setData(null);
       onRecordsLoaded?.(null); // 조회 실패 시 기존 서버 상태를 남겨두지 않음
+      onAuthorizedToken?.("");
     } finally {
       setBusy(false);
     }
   }
+
+  // After completing a dose, re-read Redis so the panel and calendar agree.
+  useEffect(() => {
+    if (refreshVersion === 0) return;
+    void loadFromServer();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshVersion]);
 
   const grouped = useMemo(() => {
     const map = new Map<string, DeviceCalendarEntry[]>();
@@ -90,8 +106,8 @@ export default function DeviceCalendarPanel({ onRecordsLoaded }: Props) {
       <div className="space-y-1">
         <h2 className="text-xl font-bold text-gray-900">스마트 약통 복약 기록 (서버)</h2>
         <p className="text-sm text-gray-600">
-          서버 기록을 불러오면 달력의 날짜 표시와 오늘의 체크리스트에도
-          ESP32 완료 상태가 반영됩니다. 수동 체크는 브라우저에만 저장됩니다.
+          서버 기록을 불러온 뒤, 복약 시간이 지난 일정은 웹에서도 완료 처리할 수 있습니다.
+          ESP32와 웹의 완료 상태는 같은 Redis 데이터에 저장됩니다.
         </p>
       </div>
 
@@ -100,7 +116,10 @@ export default function DeviceCalendarPanel({ onRecordsLoaded }: Props) {
       </label>
       <input
         id="device-calendar-token" type="password" autoComplete="off"
-        value={token} onChange={(e) => setToken(e.target.value)}
+        value={token} onChange={(e) => {
+          setToken(e.target.value);
+          onAuthorizedToken?.("");
+        }}
         placeholder="스마트 약통 등록 때 사용한 관리자 토큰"
         className="w-full rounded-xl border border-gray-300 px-4 py-3 text-gray-900"
       />
@@ -145,21 +164,32 @@ export default function DeviceCalendarPanel({ onRecordsLoaded }: Props) {
                         </p>
                       )}
                     </div>
-                    <span className={`shrink-0 rounded-lg px-2 py-1 text-xs font-bold ${
-                      item.status === "completed"
-                        ? "bg-green-100 text-green-800"
-                        : "bg-amber-100 text-amber-800"
-                    }`}>
-                      {item.status === "completed" ? "복용 완료" : "미완료"}
-                    </span>
+                    <div className="flex shrink-0 flex-col items-end gap-2">
+                      <span className={`rounded-lg px-2 py-1 text-xs font-bold ${
+                        item.status === "completed"
+                          ? "bg-green-100 text-green-800"
+                          : "bg-amber-100 text-amber-800"
+                      }`}>
+                        {item.status === "completed" ? "복용 완료" : "미완료"}
+                      </span>
+                      {item.status === "pending" && onCompleteRequest &&
+                        Date.parse(item.scheduledAt) <= Date.now() && (
+                          <button type="button"
+                            disabled={savingOccurrenceId !== null}
+                            onClick={() => onCompleteRequest(item)}
+                            className="rounded-lg bg-blue-700 px-3 py-2 text-xs font-bold text-white disabled:opacity-50">
+                            {savingOccurrenceId === item.occurrenceId ? "저장 중..." : "웹에서 복용 완료"}
+                          </button>
+                      )}
+                    </div>
                   </li>
                 ))}
               </ul>
             </div>
           ))}
           <p className="text-xs text-gray-500">
-            현재 Redis에 남아 있는 일정만 표시합니다. 새 처방전을 등록하면
-            기존 일정 목록과 완료 기록은 교체될 수 있습니다.
+            웹에서 완료 처리한 기록은 서버에 저장되며 취소할 수 없습니다.
+            새 처방전을 등록하면 기존 일정 목록과 완료 기록은 교체될 수 있습니다.
           </p>
         </div>
       )}
