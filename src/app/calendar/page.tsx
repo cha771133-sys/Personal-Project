@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import BottomNav from '@/components/BottomNav';
+import DeviceCalendarPanel from '@/components/DeviceCalendarPanel';
 import { useVoiceGuide } from '@/hooks/useVoiceGuide';
 import type { AnalyzeResponse, Medication, MedicationCheckState } from '@/types/prescription';
 import type { PillInfoResult } from '@/app/api/pill-info/route';
@@ -224,6 +225,9 @@ export default function CalendarPage() {
             {adherence >= 80 ? '정말 잘 챙겨 드시고 있어요 👏' : '조금 더 꼼꼼하게 챙겨봐요 💪'}
           </p>
         </div>
+
+        {/* ESP32 / Redis: read-only server calendar */}
+        <DeviceCalendarPanel />
 
         {/* 달력 */}
         <div className="bg-white rounded-2xl shadow-sm p-4 space-y-3">
