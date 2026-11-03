@@ -66,7 +66,8 @@ export async function POST(req: NextRequest) {
   }
 
   // ── 멱등성 체크: 오늘 이미 발송했으면 중복 차단 ──────────────
-  const today = new Date().toISOString().slice(0, 10)
+  // 서버(Vercel)는 UTC — 한국 날짜 기준으로 계산해야 KST 00~09시에 전날로 잡히지 않음
+  const today = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10)
   const idempotencyKey = `notify:${patientChatId}:${drugName}:${scheduleTime}:${today}`
 
   const alreadySent = await redis.get(idempotencyKey).catch(() => null)

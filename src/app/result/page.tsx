@@ -123,11 +123,7 @@ export default function ResultPage() {
 
       for (const med of result.data.medications) {
         for (const time of toArray(med.alert_times)) {
-          const [h, m] = time.split(':').map(Number);
-          const rH = m >= 5 ? h : (h - 1 < 0 ? 23 : h - 1);
-          const rM = m >= 5 ? m - 5 : 60 + m - 5;
-          const rStr = `${String(rH).padStart(2, '0')}:${String(rM).padStart(2, '0')}`;
-          scheduleLines.push(`• ${med.drug_name_simple} — ${rStr} 알림 (${time} 복용)`);
+          scheduleLines.push(`• ${med.drug_name_simple} — ${time} 알림`);
         }
       }
 
@@ -137,7 +133,7 @@ export default function ResultPage() {
         `✅ 복약 알림 예약이 완료됐어요!\n\n` +
         `📅 예약 시각: ${nowStr}\n\n` +
         `예약된 알림 목록:\n${scheduleLines.join('\n')}\n\n` +
-        `복용 5분 전에 알림을 보내드릴게요 💊`;
+        `복용 시간에 맞춰 알림을 보내드릴게요 💊`;
 
       const res = await fetch('/api/telegram', {
         method: 'POST',
@@ -351,7 +347,7 @@ export default function ResultPage() {
                 <span className="animate-spin">⏳</span> 예약 중...
               </span>
             ) : telegramState === 'done' ? (
-              `✅ ${scheduledCount}개 알림 예약 완료! (5분 전 전송)`
+              `✅ ${scheduledCount}개 알림 예약 완료! (복용 시간에 전송)`
             ) : telegramState === 'error' ? (
               '⚠️ 예약 실패. 다시 시도해주세요.'
             ) : (

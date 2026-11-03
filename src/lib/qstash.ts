@@ -24,7 +24,8 @@ export async function scheduleNotification(
   baseUrl: string
 ): Promise<string> {
   const [hour, minute] = scheduleTime.split(':').map(Number)
-  const cron = `${minute} ${hour} * * *`
+  // QStash는 cron을 기본 UTC로 해석 → 한국 시간 기준으로 실행되도록 CRON_TZ 지정
+  const cron = `CRON_TZ=Asia/Seoul ${minute} ${hour} * * *`
 
   const result = await qstash.schedules.create({
     destination: `${baseUrl}/api/notify`,
