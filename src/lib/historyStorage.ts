@@ -45,6 +45,20 @@ export function saveHistory(result: PrescriptionResult): string {
   return id;
 }
 
+// Update a history entry after the user reviews AI recognition.
+export function replaceHistoryMedications(id: string, prescription: PrescriptionResult): void {
+  if (typeof window === 'undefined') return;
+  const items = getHistoryList();
+  const index = items.findIndex(item => item.id === id);
+  if (index === -1) throw new Error('History item not found');
+  items[index] = {
+    ...items[index],
+    hospitalName: prescription.hospital || '병원 정보 없음',
+    medications: prescription.medications,
+  };
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+}
+
 export function getHistoryList(): PrescriptionHistory[] {
   if (typeof window === 'undefined') return [];
   try {

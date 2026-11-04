@@ -6,7 +6,8 @@ import MedicationCard from '@/components/MedicationCard';
 import BottomNav from '@/components/BottomNav';
 import { useVoiceGuide } from '@/hooks/useVoiceGuide';
 import { useNotification } from '@/hooks/useNotification';
-import { saveHistory } from '@/lib/historyStorage';
+import { saveHistory, replaceHistoryMedications } from '@/lib/historyStorage';
+import PrescriptionReviewPanel from '@/components/PrescriptionReviewPanel';
 import type { AnalyzeResponse, Medication } from '@/types/prescription';
 import DevicePublishPanel from '@/components/DevicePublishPanel';
 
@@ -27,6 +28,9 @@ export default function ResultPage() {
   const router = useRouter();
   const [result, setResult] = useState<AnalyzeResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  // PRESCRIPTION_REVIEW_V1: require explicit review before registration.
+  const [reviewConfirmed, setReviewConfirmed] = useState(false);
+  const historyIdRef = useRef<string | null>(null);
 
   // 약품별 알람 ON/OFF 상태 (기본값: 전체 ON)
   const [alarmEnabled, setAlarmEnabled] = useState<Record<string, boolean>>({});
@@ -64,8 +68,7 @@ export default function ResultPage() {
       setIsLoading(false);
 
       if (parsed.data?.medications?.length) {
-        // 히스토리 자동 저장 (처음 로드 시 1회)
-        saveHistory(parsed.data);
+        // AI 원문은 검토 전이므로 히스토리에 확정 저장하지 않습니다.
 
         // 모든 약 알람 기본 ON
         const initial: Record<string, boolean> = {};
@@ -101,6 +104,7 @@ export default function ResultPage() {
 
   // 브라우저 푸시 알람 설정 (ON 상태인 약만)
   const handleBrowserAlarm = async () => {
+    if (!reviewConfirmed) { window.alert('처방전 내용을 먼저 수정·확인하세요.'); return; }
     if (!result?.data) return;
     setIsSetting(true);
     try {
@@ -116,6 +120,7 @@ export default function ResultPage() {
 
   // 예약 확인 메시지 즉시 발송 (약별 개별 발송은 QStash cron이 담당)
   const handleTelegram = async () => {
+    if (!reviewConfirmed) { window.alert('처방전 내용을 먼저 수정·확인하세요.'); return; }
     if (!result?.data) return;
     setTelegramState('sending');
     try {
@@ -153,6 +158,41 @@ export default function ResultPage() {
     }
   };
 
+  // PRESCRIPTION_REVIEW_V1: reviewed data becomes the single client-side source.
+  const handleReviewedPrescription = (reviewed: Medication[]): boolean => {
+    if (!result?.data) return false;
+    const previous = result.data.medications;
+    const next: AnalyzeResponse = {
+      ...result,
+      data: { ...result.data, medications: reviewed },
+    };
+    try {
+      sessionStorage.setItem('yaksouk_result', JSON.stringify(next));
+      const historyId = historyIdRef.current ?? saveHistory(next.data!);
+      replaceHistoryMedications(historyId, next.data!);
+      historyIdRef.current = historyId;
+    } catch (error) {
+      console.error('Failed to store reviewed prescription:', error);
+      return false;
+    }
+    setAlarmEnabled(old => {
+      const updated: Record<string, boolean> = {};
+      reviewed.forEach((med, index) => {
+        const oldName = previous[index]?.drug_name_simple;
+        updated[med.drug_name_simple] = oldName ? old[oldName] !== false : true;
+      });
+      return updated;
+    });
+    if (browserAlarmSet) {
+      notification.cancelAllAlerts();
+      setBrowserAlarmSet(false);
+    }
+    setCardIndex(index => Math.min(index, reviewed.length - 1));
+    setResult(next);
+    setReviewConfirmed(true);
+    return true;
+  };
+
   // ── 로딩 ────────────────────────────────────────────────────
   if (isLoading) {
     return (
@@ -187,6 +227,13 @@ export default function ResultPage() {
             <p className="text-lg text-green-700">🏥 {data.hospital}</p>
           )}
         </div>
+
+        <PrescriptionReviewPanel
+          medications={data.medications}
+          confirmed={reviewConfirmed}
+          onDirty={() => setReviewConfirmed(false)}
+          onConfirm={handleReviewedPrescription}
+        />
 
         {/* ── 2. 약품 카드 목록 ─────────────────────────── */}
         <div className="space-y-4">
@@ -312,11 +359,17 @@ export default function ResultPage() {
             </ul>
           </div>
         )}
-<DevicePublishPanel
-  medications={data.medications.filter(
-    m => alarmEnabled[m.drug_name_simple] !== false
-  )}
-/>
+{reviewConfirmed ? (
+          <DevicePublishPanel
+            medications={data.medications.filter(
+              m => alarmEnabled[m.drug_name_simple] !== false
+            )}
+          />
+        ) : (
+          <div className="rounded-2xl border-2 border-orange-300 bg-orange-50 p-5 text-sm font-semibold text-orange-900">
+            스마트 약통 등록은 위의 처방전 정보를 수정·확인한 다음 사용할 수 있습니다.
+          </div>
+        )}
         {/* ── 3. 하단 통합 알림 설정 ──────────────────────── */}
         <div className="bg-white border-2 border-gray-200 rounded-2xl p-5 space-y-3">
           <div className="flex items-center gap-2 mb-1">
@@ -333,7 +386,7 @@ export default function ResultPage() {
           <button
             type="button"
             onClick={handleTelegram}
-            disabled={telegramState === 'sending' || telegramState === 'done'}
+            disabled={!reviewConfirmed || telegramState === 'sending' || telegramState === 'done'}
             className={`w-full py-4 px-6 text-lg font-bold rounded-2xl transition-all active:scale-95 disabled:opacity-60 ${
               telegramState === 'done'
                 ? 'bg-green-500 text-white'
@@ -360,7 +413,7 @@ export default function ResultPage() {
             <button
               type="button"
               onClick={handleBrowserAlarm}
-              disabled={isSetting || browserAlarmSet}
+              disabled={!reviewConfirmed || isSetting || browserAlarmSet}
               className={`w-full py-4 px-6 text-lg font-bold rounded-2xl transition-all active:scale-95 disabled:opacity-60 ${
                 browserAlarmSet
                   ? 'bg-green-100 border-2 border-green-500 text-green-800'
