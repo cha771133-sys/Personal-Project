@@ -68,6 +68,23 @@ export async function POST(req: NextRequest) {
   // ── 멱등성 체크: 오늘 이미 발송했으면 중복 차단 ──────────────
   // 서버(Vercel)는 UTC — 한국 날짜 기준으로 계산해야 KST 00~09시에 전날로 잡히지 않음
   const today = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10)
+
+  // CONFIRMED_NOTIFICATIONS_V1: only the active, reviewed plan may send alerts.
+  // Existing legacy jobs are allowed until the first confirmed plan is registered.
+  const active = await redis.get<{ planId: string }>(`notifications:active:${patientChatId}`)
+  if (payload.planId) {
+    if (!active || active.planId !== payload.planId) {
+      return NextResponse.json({ skipped: true, reason: 'stale-plan' })
+    }
+    const validDate = (s: unknown): s is string =>
+      typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s)
+    if (!validDate(payload.startsOn) || !validDate(payload.expiresOn) ||
+        today < payload.startsOn || today > payload.expiresOn) {
+      return NextResponse.json({ skipped: true, reason: 'outside-prescription-period' })
+    }
+  } else if (active?.planId) {
+    return NextResponse.json({ skipped: true, reason: 'superseded-legacy-job' })
+  }
   const idempotencyKey = `notify:${patientChatId}:${drugName}:${scheduleTime}:${today}`
 
   const alreadySent = await redis.get(idempotencyKey).catch(() => null)

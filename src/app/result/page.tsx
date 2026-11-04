@@ -40,6 +40,9 @@ export default function ResultPage() {
   // 텔레그램 상태
   const [telegramState, setTelegramState] = useState<TelegramState>('idle');
   const [scheduledCount, setScheduledCount] = useState(0);
+  // CONFIRMED_NOTIFICATIONS_V1: admin-authenticated actual QStash registration.
+  const [notificationToken, setNotificationToken] = useState('');
+  const [notificationMessage, setNotificationMessage] = useState('');
 
   // 약 목록 뷰 모드
   const [resultView, setResultView] = useState<ResultViewMode>('list');
@@ -89,6 +92,8 @@ export default function ResultPage() {
   // 개별 약 알람 토글
   const toggleAlarm = (drugName: string) => {
     setAlarmEnabled(prev => ({ ...prev, [drugName]: !prev[drugName] }));
+    setTelegramState('idle');
+    setNotificationMessage('알림 대상 약이 변경됐습니다. 변경된 예약을 다시 등록하세요.');
     // 브라우저 알람이 이미 설정된 경우 초기화 (재설정 유도)
     if (browserAlarmSet) {
       notification.cancelAllAlerts();
@@ -118,43 +123,58 @@ export default function ResultPage() {
     }
   };
 
-  // 예약 확인 메시지 즉시 발송 (약별 개별 발송은 QStash cron이 담당)
+  // Confirmed schedule registration: do not claim success after only sending a message.
   const handleTelegram = async () => {
-    if (!reviewConfirmed) { window.alert('처방전 내용을 먼저 수정·확인하세요.'); return; }
-    if (!result?.data) return;
-    setTelegramState('sending');
-    try {
-      const scheduleLines: string[] = [];
-
-      for (const med of result.data.medications) {
-        for (const time of toArray(med.alert_times)) {
-          scheduleLines.push(`• ${med.drug_name_simple} — ${time} 알림`);
-        }
-      }
-
-      const now = new Date();
-      const nowStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-      const confirmMsg =
-        `✅ 복약 알림 예약이 완료됐어요!\n\n` +
-        `📅 예약 시각: ${nowStr}\n\n` +
-        `예약된 알림 목록:\n${scheduleLines.join('\n')}\n\n` +
-        `복용 시간에 맞춰 알림을 보내드릴게요 💊`;
-
-      const res = await fetch('/api/telegram', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: confirmMsg }),
-      });
-      const data = await res.json();
-      if (!res.ok || data.status === 'error') throw new Error(data.message);
-
-      setScheduledCount(scheduleLines.length);
-      setTelegramState('done');
-      setTimeout(() => setTelegramState('idle'), 5000);
-    } catch (e) {
-      console.error('텔레그램 예약 실패:', e);
+    if (!reviewConfirmed || !result?.data) return;
+    if (!notificationToken.trim()) {
+      setNotificationMessage('관리자 등록 토큰을 입력하세요.');
       setTelegramState('error');
-      setTimeout(() => setTelegramState('idle'), 4000);
+      return;
+    }
+    const selected = result.data.medications.filter(
+      med => alarmEnabled[med.drug_name_simple] !== false
+    );
+    if (selected.length === 0) {
+      setNotificationMessage('알림을 받을 약을 하나 이상 선택하세요.');
+      return;
+    }
+    if (!window.confirm(
+      '최종 확인한 복약 정보로 Telegram/QStash 알림을 등록할까요?\n' +
+      '기존 Telegram 예약은 교체되지만 ESP32의 Redis 일정은 바뀌지 않습니다.'
+    )) return;
+    setTelegramState('sending');
+    setNotificationMessage('');
+    try {
+      const res = await fetch('/api/notifications/confirm', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${notificationToken}`,
+        },
+        body: JSON.stringify({
+          confirmed: true,
+          patientName: result.data.patient_name ?? '',
+          medications: selected,
+        }),
+        cache: 'no-store',
+      });
+      const data: {
+        success?: boolean; error?: string; scheduleCount?: number;
+        alreadyScheduled?: boolean; warning?: string;
+      } = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`);
+      setScheduledCount(data.scheduleCount ?? 0);
+      setTelegramState('done');
+      setNotificationMessage(
+        (data.alreadyScheduled
+          ? '동일한 내용이 이미 예약되어 있어 중복 등록하지 않았습니다.'
+          : '최종 확인한 복약 정보로 QStash 알림을 등록했습니다.') +
+        (data.warning ? ` 주의: ${data.warning}` : '')
+      );
+      setNotificationToken('');
+    } catch (e) {
+      setTelegramState('error');
+      setNotificationMessage(e instanceof Error ? e.message : '알림 예약에 실패했습니다.');
     }
   };
 
@@ -231,7 +251,11 @@ export default function ResultPage() {
         <PrescriptionReviewPanel
           medications={data.medications}
           confirmed={reviewConfirmed}
-          onDirty={() => setReviewConfirmed(false)}
+          onDirty={() => {
+            setReviewConfirmed(false);
+            setTelegramState('idle');
+            setNotificationMessage('복약 정보를 수정했습니다. 기존 Telegram 예약은 새로 등록할 때까지 유지될 수 있습니다.');
+          }}
           onConfirm={handleReviewedPrescription}
         />
 
@@ -382,11 +406,27 @@ export default function ResultPage() {
             )}
           </div>
 
+          {/* 최종 확인된 내용으로 실제 예약을 생성합니다. */}
+          <label htmlFor="confirmed-notify-token" className="block text-sm font-semibold text-gray-800">
+            관리자 등록 토큰 (DEVICE_PUBLISH_TOKEN)
+          </label>
+          <input id="confirmed-notify-token" type="password" autoComplete="off"
+            value={notificationToken} onChange={e => {
+              setNotificationToken(e.target.value);
+              if (telegramState === 'done') setTelegramState('idle');
+            }}
+            placeholder="스마트 약통 등록 때 사용하는 관리자 토큰"
+            className="w-full rounded-xl border border-gray-300 px-4 py-3 text-gray-900"
+          />
+          <p className="text-xs text-orange-800">
+            최종 확인 후 Telegram/QStash 예약 버튼을 눌러야 실제 알림이 등록됩니다.
+            기존 예약은 변경된 복약 정보를 다시 등록할 때까지 유지될 수 있습니다.
+          </p>
           {/* 텔레그램 버튼 */}
           <button
             type="button"
             onClick={handleTelegram}
-            disabled={!reviewConfirmed || telegramState === 'sending' || telegramState === 'done'}
+            disabled={!reviewConfirmed || telegramState === 'sending' || !notificationToken.trim()}
             className={`w-full py-4 px-6 text-lg font-bold rounded-2xl transition-all active:scale-95 disabled:opacity-60 ${
               telegramState === 'done'
                 ? 'bg-green-500 text-white'
@@ -400,13 +440,19 @@ export default function ResultPage() {
                 <span className="animate-spin">⏳</span> 예약 중...
               </span>
             ) : telegramState === 'done' ? (
-              `✅ ${scheduledCount}개 알림 예약 완료! (복용 시간에 전송)`
+              `✅ ${scheduledCount}건 QStash 예약 완료`
             ) : telegramState === 'error' ? (
               '⚠️ 예약 실패. 다시 시도해주세요.'
             ) : (
-              '💬 텔레그램으로 전체 알림 받기'
+              '💬 Telegram/QStash 알림 예약·갱신'
             )}
           </button>
+
+          {notificationMessage && (
+            <p role="status" className={`rounded-xl p-3 text-sm font-semibold ${telegramState === 'error' ? 'bg-red-50 text-red-800' : 'bg-blue-50 text-blue-900'}`}>
+              {notificationMessage}
+            </p>
+          )}
 
           {/* 브라우저 알림 버튼 */}
           {notification.isSupported && notification.permission !== 'denied' && (

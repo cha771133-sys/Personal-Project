@@ -164,7 +164,8 @@ export default function PrescriptionReviewPanel({
       <div className="rounded-xl border border-orange-300 bg-orange-50 p-3 text-sm text-orange-900 space-y-1">
         <p className="font-bold">안전 확인</p>
         <p>복용량·시간·기간을 추측해서 입력하지 마세요. 확인할 수 없다면 처방 의료기관 또는 약사에게 문의하세요.</p>
-        <p>현재 Telegram/QStash 알림은 AI 분석 직후 별도로 예약됩니다. 여기서 수정해도 이미 예약된 Telegram/QStash 알림은 자동 변경되지 않습니다. 이번 단계에서는 스마트 약통 등록과 브라우저 알림에만 수정값이 반영됩니다.</p>
+        <p>Telegram/QStash 알림은 분석 직후 자동 예약되지 않습니다. 최종 확인 후 아래 알림 설정에서 관리자 토큰을 입력하고 Telegram/QStash 알림 예약·갱신 버튼을 눌러 등록하세요. 기존 예약은 새로 등록할 때까지 유지될 수 있습니다.
+        {/* CONFIRMED_NOTIFICATIONS_V1 */}</p>
       </div>
 
       {draft.map((m, i) => (

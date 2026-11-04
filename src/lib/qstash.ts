@@ -11,6 +11,9 @@ export interface NotifyPayload {
   dose: string
   scheduleTime: string  // "07:30"
   alertType: AlertType  // 보호자 알림 조건 필터링에 사용
+  planId?: string
+  startsOn?: string // YYYY-MM-DD (Asia/Seoul)
+  expiresOn?: string // YYYY-MM-DD (Asia/Seoul), inclusive
 }
 
 /**
@@ -53,4 +56,10 @@ export async function deleteSchedules(scheduleIds: string[]): Promise<void> {
       console.warn(`QStash 스케줄 삭제 실패 [${scheduleIds[i]}]:`, result.reason)
     }
   })
+}
+
+// CONFIRMED_NOTIFICATIONS_V1: strict cleanup reports exact failed schedule IDs.
+export async function deleteSchedulesWithFailures(ids: string[]): Promise<string[]> {
+  const results = await Promise.allSettled(ids.map(id => qstash.schedules.delete(id)))
+  return ids.filter((_, i) => results[i].status === 'rejected')
 }

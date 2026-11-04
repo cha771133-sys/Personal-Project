@@ -2,9 +2,6 @@ import 'server-only';
 import { GoogleGenerativeAI, type Part } from '@google/generative-ai';
 import { NextRequest, NextResponse } from 'next/server';
 import type { AnalyzeResponse, PrescriptionResult } from '@/types/prescription';
-import { scheduleNotification, deleteSchedules } from '@/lib/qstash';
-import { redis, saveScheduleIds, getScheduleIds } from '@/lib/redis';
-import type { GuardianData } from '@/types/prescription';
 
 // GET: API 키 및 사용 가능한 모델 목록 진단
 export async function GET() {
@@ -215,67 +212,6 @@ async function verifyMedication(drugName: string): Promise<{ verified: boolean; 
   }
 }
 
-async function sendTelegramMessage(botToken: string, chatId: string, text: string): Promise<boolean> {
-  try {
-    const res = await fetch(
-      `https://api.telegram.org/bot${botToken}/sendMessage`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML' }),
-        signal: AbortSignal.timeout(10000),
-      }
-    );
-    const data = await res.json();
-    if (!res.ok || !data.ok) {
-      console.error(`텔레그램 전송 실패 [${chatId}]:`, data);
-      return false;
-    }
-    return true;
-  } catch (e) {
-    console.error(`텔레그램 전송 오류 [${chatId}]:`, e);
-    return false;
-  }
-}
-
-async function sendTelegramAlert(
-  prescription: PrescriptionResult,
-  patientChatId: string,
-  guardianChatId?: string
-): Promise<boolean> {
-  const botToken = process.env.TELEGRAM_BOT_TOKEN;
-  if (!botToken || !patientChatId) return false;
-
-  const count = prescription.medications.length;
-  const patientName = prescription.patient_name || '환자'
-  const timeSummary = [...new Set(
-    prescription.medications.flatMap(m => m.alert_times ?? [])
-  )].sort().join(', ')
-
-  // 환자에게 발송
-  const patientMsg =
-    `✅ <b>처방전 등록 완료!</b>\n\n` +
-    `총 ${count}개 약이 등록되었어요.\n` +
-    `복약 시간: ${timeSummary || '미정'}\n` +
-    `매일 복약 시간마다 알림을 보내드릴게요 😊`
-
-  const patientSent = await sendTelegramMessage(botToken, patientChatId, patientMsg)
-  console.log('✅ 환자 텔레그램 전송:', patientSent)
-
-  // 보호자에게 발송 (guardianChatId가 있을 때만)
-  if (guardianChatId) {
-    const guardianMsg =
-      `👤 <b>보호자 알림</b>\n\n` +
-      `${patientName}님의 처방전이 새로 등록됐어요.\n` +
-      `총 ${count}개 약 / 복약 시간: ${timeSummary || '미정'}\n\n` +
-      `매일 복약 시간마다 알림을 보내드릴게요.`
-    const guardianSent = await sendTelegramMessage(botToken, guardianChatId, guardianMsg)
-    console.log('✅ 보호자 텔레그램 전송:', guardianSent)
-  }
-
-  return patientSent
-}
-
 async function sendToN8N(prescription: PrescriptionResult, phone?: string): Promise<boolean> {
   const webhookUrl = process.env.N8N_WEBHOOK_URL;
   if (!webhookUrl || webhookUrl.includes('localhost')) return false;
@@ -299,15 +235,9 @@ export async function POST(request: NextRequest) {
 
   // ── 1. FormData 파싱 ──────────────────────────────────────
   let file: File;
-  let phone: string | undefined;
-  const patientChatId = process.env.TELEGRAM_CHAT_ID || '';
-  if (!patientChatId) {
-    console.error('❌ TELEGRAM_CHAT_ID 환경변수가 설정되지 않았습니다.');
-  }
   try {
     const formData = await request.formData();
     const rawFile = formData.get('image');
-    phone = formData.get('phone_number')?.toString() ?? undefined;
 
     if (!rawFile || !(rawFile instanceof File)) {
       return NextResponse.json<AnalyzeResponse>(
@@ -450,67 +380,13 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // ── 8. QStash cron 등록 (매일 반복 알림) ──────────────────
-    console.log('보호자 조회 키:', `guardian:${patientChatId}`)
-    const guardianData = await redis.get<GuardianData>(`guardian:${patientChatId}`).catch(() => null)
-    console.log('보호자 조회 결과:', guardianData)
-
-    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://your-app.vercel.app'
-    let alertsRegistered = false
-
-    try {
-      // 8-1. 기존 스케줄 삭제 — 재업로드 시 중복 알림 방지
-      const existingIds = await getScheduleIds(patientChatId)
-      if (existingIds.length > 0) {
-        console.log(`🗑️ 기존 QStash 스케줄 ${existingIds.length}개 삭제 중...`)
-        await deleteSchedules(existingIds)
-      }
-
-      // 8-2. 신규 스케줄 등록 후 ID 수집
-      const newScheduleIds: string[] = []
-      for (const med of prescriptionData.medications) {
-        for (const time of med.alert_times ?? []) {
-          console.log('QStash payload:', { patientChatId, guardianChatId: guardianData?.guardianChatId })
-          const scheduleId = await scheduleNotification(
-            time,
-            {
-              patientChatId,
-              patientName: prescriptionData.patient_name,
-              guardianChatId: guardianData?.guardianChatId,
-              drugName: med.drug_name_simple,
-              dose: med.dosage,
-              scheduleTime: time,
-              alertType: 'medication',
-            },
-            baseUrl
-          )
-          newScheduleIds.push(scheduleId)
-        }
-      }
-
-      // 8-3. 새 스케줄 ID를 Redis에 저장 (다음 재분석 시 삭제용)
-      await saveScheduleIds(patientChatId, newScheduleIds)
-
-      alertsRegistered = true
-      console.log(`✅ QStash 스케줄 ${newScheduleIds.length}개 등록 완료`)
-    } catch (e) {
-      console.error('QStash 스케줄 등록 실패 (알림은 계속 진행):', e)
-    }
-
-    // ── 9. 루프 완료 후 요약 텔레그램 1회 발송 (환자 + 보호자) ────
-    const telegramSent = await sendTelegramAlert(
-      prescriptionData,
-      patientChatId,
-      guardianData?.guardianChatId
-    )
-
-    console.log('텔레그램 전송:', telegramSent, '| QStash 등록:', alertsRegistered);
-
+    // CONFIRMED_NOTIFICATIONS_V1: analysis must never schedule/send alerts.
+    // An authorized POST /api/notifications/confirm is required after review.
     return NextResponse.json<AnalyzeResponse>({
       status: 'success',
       data: prescriptionData,
       message: '처방전 분석이 완료됐어요!',
-      alerts_registered: alertsRegistered,
+      alerts_registered: false,
     });
 
   } catch (error: unknown) {
