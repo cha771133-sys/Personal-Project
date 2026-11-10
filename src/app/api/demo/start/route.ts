@@ -27,7 +27,31 @@ if raw then
   end
   store = decoded
 end
-if #store.medications >= tonumber(ARGV[3]) then return -2 end
+-- 기존 시연 기록 자동 정리
+local kept = {}
+
+for _, med in ipairs(store.medications) do
+  if type(med) ~= 'table'
+    or type(med.occurrenceId) ~= 'string'
+    or type(med.scheduledAt) ~= 'string' then
+    return -1
+  end
+
+  local isDemo = string.sub(med.occurrenceId, 1, 5) == 'demo-'
+
+  -- 일반 복약 기록과 아직 시간이 되지 않은 시연 일정은 유지
+  if not isDemo or
+     (med.status == 'pending' and med.scheduledAt >= ARGV[2]) then
+    table.insert(kept, med)
+  end
+end
+
+store.medications = kept
+
+-- 정리 후 24건 제한 확인
+if #store.medications >= tonumber(ARGV[3]) then
+  return -2
+end
 for _, med in ipairs(store.medications) do
   if type(med) ~= 'table' or type(med.occurrenceId) ~= 'string' or
     type(med.scheduledAt) ~= 'string' then return -1 end
@@ -84,12 +108,16 @@ function validName(x: unknown): x is string {
 }
 
 export async function POST(req: NextRequest) {
+  // 웹에서는 관리자 토큰, ESP32의 시연 버튼에서는 기존 장치 토큰을 사용합니다.
+  // 관리자 토큰을 ESP32 펌웨어에 넣지 않습니다.
   const admin = process.env.DEVICE_PUBLISH_TOKEN;
-  if (!admin || admin.length < 32) return fail("PUBLISH_TOKEN_NOT_CONFIGURED", 503);
+  const device = process.env.DEVICE_API_TOKEN;
+  if ((!admin || admin.length < 32) && !device) return fail("DEMO_AUTH_NOT_CONFIGURED", 503);
   const authorization = req.headers.get("authorization") || "";
-  if (!authorization.startsWith("Bearer ") || !safeEqual(authorization.slice(7), admin)) {
-    return fail("UNAUTHORIZED", 401);
-  }
+  const token = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
+  const isAdmin = !!admin && admin.length >= 32 && safeEqual(token, admin);
+  const isDevice = !!device && !!token && safeEqual(token, device);
+  if (!isAdmin && !isDevice) return fail("UNAUTHORIZED", 401);
   if (!process.env.QSTASH_TOKEN || !process.env.QSTASH_CURRENT_SIGNING_KEY ||
       !process.env.QSTASH_NEXT_SIGNING_KEY || !process.env.TELEGRAM_BOT_TOKEN ||
       !process.env.TELEGRAM_CHAT_ID) {
@@ -103,11 +131,13 @@ export async function POST(req: NextRequest) {
   try { data = JSON.parse(raw); } catch { return fail("INVALID_JSON", 400); }
   if (!data || typeof data !== "object" || Array.isArray(data)) return fail("INVALID_REQUEST", 400);
   const request = data as Record<string, unknown>;
-  if (request.confirmed !== true || !validName(request.name) || !validName(request.dose)) {
+  if (request.confirmed !== true || (!isDevice && (!validName(request.name) || !validName(request.dose)))) {
     return fail("INVALID_DEMO_MEDICATION", 422);
   }
-  const name = request.name.trim();
-  const dose = request.dose.trim();
+  // 기기 요청은 서버에 정의된 비의료용 테스트 약만 사용합니다.
+  // 웹 관리자 시연은 기존과 같이 최종 확인된 약 이름/복용량을 사용합니다.
+  const name = isDevice ? "학술제 시연약 A" : (request.name as string).trim();
+  const dose = isDevice ? "1정" : (request.dose as string).trim();
 
   const originText = process.env.NEXT_PUBLIC_BASE_URL || req.nextUrl.origin;
   let origin = "";
